@@ -2239,6 +2239,86 @@
         };
       }
 
+            /* ================================================================
+         V18.3｜背景 Email 提醒資料
+         ================================================================ */
+      function buildTaipeiDueAt(dateStr, timeStr) {
+        if (!dateStr || !timeStr) return null;
+
+        const normalizedTime =
+          /^\d{2}:\d{2}$/.test(timeStr)
+            ? `${timeStr}:00`
+            : timeStr;
+
+        const due = new Date(
+          `${dateStr}T${normalizedTime}+08:00`,
+        );
+
+        if (Number.isNaN(due.getTime())) {
+          return null;
+        }
+
+        return due.toISOString();
+      }
+
+      function normalizeReminderTask(task) {
+        if (!task) return task;
+
+        const calculatedDueAt = buildTaipeiDueAt(
+          task.date,
+          task.time,
+        );
+
+        const oldDueAt =
+          typeof task.dueAt === "string"
+            ? task.dueAt
+            : null;
+
+        /*
+         * 如果使用者修改日期或時間：
+         * dueAt 會跟舊值不同，
+         * Email 必須重新變成「尚未寄送」。
+         */
+        const reminderTimeChanged =
+          oldDueAt &&
+          calculatedDueAt &&
+          oldDueAt !== calculatedDueAt;
+
+        let emailNotified;
+
+        if (reminderTimeChanged) {
+          emailNotified = false;
+        } else if (
+          typeof task.emailNotified === "boolean"
+        ) {
+          emailNotified = task.emailNotified;
+        } else {
+          /*
+           * 舊版任務沒有 emailNotified。
+           *
+           * 如果 notified 已經是 true，
+           * 舊版通常已經處理過提醒，
+           * 先當作 Email 已處理，
+           * 避免新版突然重寄一堆舊提醒。
+           */
+          emailNotified = Boolean(task.notified);
+        }
+
+        return {
+          ...task,
+
+          dueAt:
+            calculatedDueAt ||
+            oldDueAt ||
+            null,
+
+          emailNotified,
+
+          emailNotifiedAt:
+            task.emailNotifiedAt || null,
+        };
+      }
+
       const isoToday = getTaipeiNowParts().date;
 
       /* Demo 預設任務。createdAt 是建立時間，completedAt 是最近完成時間。 */
@@ -2399,7 +2479,10 @@
         }
 
         if (data) {
-          tasks = data.tasks || [];
+          tasks = (data.tasks || []).map(
+            normalizeReminderTask,
+          );
+          
           completionLog = data.completion_log || [];
           cycleSnooze = data.cycle_snooze || {};
           const v15State = cycleSnooze[CLOUD_V15_KEY];
@@ -2570,7 +2653,13 @@
          JS 03｜執行中狀態、DOM 快取與共用工具
          ================================================================ */
       let tasks =
-        JSON.parse(localStorage.getItem("nutnut_v9_tasks") || "null") ||
+        let tasks = (
+        JSON.parse(
+          localStorage.getItem("nutnut_v9_tasks") ||
+            "null",
+        ) || defaultTasks
+      ).map(normalizeReminderTask);
+      
         defaultTasks;
       /* 完成紀錄：每完成一次任務就新增一筆快照，永久保存，
    即使之後取消勾選、編輯或刪除任務都不會被動到，供之後做數據分析。 */
@@ -3895,47 +3984,139 @@ async function clearFriendsListForDemo() {
         }
       });
 
-      document.getElementById("taskForm").addEventListener("submit", (e) => {
-        e.preventDefault();
-        syncTimeInputFromPicker();
-        const title = document.getElementById("titleInput").value.trim();
-        const content = document.getElementById("contentInput").value.trim();
+      document
+        .getElementById("taskForm")
+        .addEventListener("submit", (e) => {
+          e.preventDefault();
 
-        /* v11.2：新增/編輯任務不再當場生成松鼠圖、也不會顯示任何預覽——
-     使用者要等到「打開提醒信」那一刻才會第一次看到這張圖。
-     aiImageUrl 先留白，實際生成的時機挪到 fireEmailNotification()，
-     也就是提醒真的觸發、要寄信的那一刻才呼叫後端。 */
-        const fields = {
-          title,
-          content,
-          date: document.getElementById("dateInput").value,
-          time: document.getElementById("timeInput").value,
-        };
-        if (editingId) {
-          const t = tasks.find((x) => x.id === editingId);
-          if (t) {
-            Object.assign(t, fields);
-            t.notified = false;
-            t.aiImageUrl = null;
-          }
-          showToast("任務已更新，會依新的時間提醒你。");
-        } else {
-          const newTask = {
-            id: crypto.randomUUID(),
-            ...fields,
-            done: false,
-            notified: false,
-            aiImageUrl: null,
-            createdAt: new Date().toISOString(),
-            completedAt: null,
+          syncTimeInputFromPicker();
+
+          const title = document
+            .getElementById("titleInput")
+            .value.trim();
+
+          const content = document
+            .getElementById("contentInput")
+            .value.trim();
+
+          const date =
+            document.getElementById(
+              "dateInput",
+            ).value;
+
+          const time =
+            document.getElementById(
+              "timeInput",
+            ).value;
+
+          const dueAt = buildTaipeiDueAt(
+            date,
+            time,
+          );
+
+          const fields = {
+            title,
+            content,
+            date,
+            time,
+            dueAt,
           };
-          tasks.push(newTask);
-          showToast("任務已建立，到了提醒時間會通知你。");
-        }
-        save();
-        render();
-        closeModal();
-      });
+
+          /* =========================
+             編輯既有任務
+             ========================= */
+          if (editingId) {
+            const t = tasks.find(
+              (x) => x.id === editingId,
+            );
+
+            if (t) {
+              const oldDueAt = t.dueAt;
+
+              Object.assign(t, fields);
+
+              /*
+               * 原本的瀏覽器提醒重新等待。
+               */
+              t.notified = false;
+
+              /*
+               * 如果提醒日期／時間有改，
+               * 後端 Email 也重新等待寄送。
+               */
+              if (
+                !oldDueAt ||
+                oldDueAt !== dueAt
+              ) {
+                t.emailNotified = false;
+                t.emailNotifiedAt = null;
+              }
+
+              /*
+               * 任務內容修改後，
+               * 原本的 AI 圖不要繼續沿用。
+               */
+              t.aiImageUrl = null;
+            }
+
+            showToast(
+              "任務已更新，會依新的時間提醒你。",
+            );
+          }
+
+          /* =========================
+             新增任務
+             ========================= */
+          else {
+            const newTask = {
+              id: crypto.randomUUID(),
+
+              title,
+              content,
+              date,
+              time,
+
+              /*
+               * 給後端排程使用的真正時間。
+               * 台灣時間會轉成 UTC ISO。
+               */
+              dueAt,
+
+              done: false,
+
+              /*
+               * notified：
+               * 前端瀏覽器通知
+               */
+              notified: false,
+
+              /*
+               * emailNotified：
+               * 後端 Email 是否真的寄過
+               */
+              emailNotified: false,
+
+              emailNotifiedAt: null,
+
+              aiImageUrl: null,
+
+              createdAt:
+                new Date().toISOString(),
+
+              completedAt: null,
+            };
+
+            tasks.push(newTask);
+
+            showToast(
+              "任務已建立，到了提醒時間會通知你。",
+            );
+          }
+
+          save();
+          render();
+          closeModal();
+        });
 
       /* ================================================================
    JS 06｜提醒通知與 AI 松鼠圖片
@@ -4472,7 +4653,6 @@ async function clearFriendsListForDemo() {
           const minutesLate = (now - due) / 60000;
           if (minutesLate <= REMIND_WINDOW_MIN) {
             fireBrowserNotification(task);
-            fireEmailNotification(task);
             showToast(`⏰ 提醒：該來 check「${task.title}」了！`);
             addNotification("reminder", `該來 check「${task.title}」了！`);
           }
