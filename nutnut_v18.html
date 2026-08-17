@@ -3969,42 +3969,58 @@ async function clearFriendsListForDemo() {
         });
       }
 
-      document.getElementById("deleteTask").addEventListener("click", () => {
-        const t = tasks.find((x) => x.id === editingId);
-        if (!t) return;
-        if (confirm(`刪除「${t.title}」？`)) {
-          tasks = tasks.filter((x) => x.id !== editingId);
-/*
- * 任務先存本機。
- */
-save();
+      /* ================================================================
+         任務刪除
+         ================================================================ */
+      document
+        .getElementById("deleteTask")
+        .addEventListener("click", async () => {
+          const t = tasks.find((x) => x.id === editingId);
 
-/*
- * save() 原本會排一個 600ms debounce。
- * 任務提醒不能等，取消這個等待，
- * 直接同步到 Supabase。
- */
-clearTimeout(cloudSyncTimer);
+          if (!t) return;
 
-try {
-  await pushCloudDataNow();
+          if (confirm(`刪除「${t.title}」？`)) {
+            tasks = tasks.filter((x) => x.id !== editingId);
 
-  console.log(
-    "✅ 任務已立即同步到 Supabase",
-  );
-} catch (error) {
-  console.error(
-    "❌ 任務立即同步失敗",
-    error,
-  );
-}
+            /*
+             * 先保存到 localStorage。
+             */
+            save();
 
-render();
-closeModal();
-          showToast("任務已刪除");
-        }
-      });
+            /*
+             * save() 原本會另外排一個 600ms debounce。
+             * 取消等待，刪除任務後直接同步 Supabase。
+             *
+             * 這樣使用者刪掉任務後就算馬上關掉網站，
+             * 雲端也不會繼續留著舊任務，
+             * 避免背景 Cron 又寄提醒。
+             */
+            clearTimeout(cloudSyncTimer);
 
+            try {
+              await pushCloudDataNow();
+
+              console.log(
+                "✅ 刪除任務已立即同步到 Supabase",
+              );
+            } catch (error) {
+              console.error(
+                "❌ 刪除任務同步 Supabase 失敗",
+                error,
+              );
+            }
+
+            render();
+            closeModal();
+
+            showToast("任務已刪除");
+          }
+        });
+
+
+      /* ================================================================
+         任務新增 / 編輯
+         ================================================================ */
       document
         .getElementById("taskForm")
         .addEventListener("submit", async (e) => {
@@ -4021,15 +4037,23 @@ closeModal();
             .value.trim();
 
           const date =
-            document.getElementById(
-              "dateInput",
-            ).value;
+            document.getElementById("dateInput").value;
 
           const time =
-            document.getElementById(
-              "timeInput",
-            ).value;
+            document.getElementById("timeInput").value;
 
+          /*
+           * 將台灣時間轉成 ISO UTC。
+           *
+           * 例如：
+           * 2026-08-18 21:00（台灣）
+           *
+           * ↓
+           *
+           * 2026-08-18T13:00:00.000Z
+           *
+           * 給後端 Cron 判斷真正的提醒時間。
+           */
           const dueAt = buildTaipeiDueAt(
             date,
             time,
@@ -4043,9 +4067,10 @@ closeModal();
             dueAt,
           };
 
-          /* =========================
+
+          /* ============================================================
              編輯既有任務
-             ========================= */
+             ============================================================ */
           if (editingId) {
             const t = tasks.find(
               (x) => x.id === editingId,
@@ -4054,16 +4079,19 @@ closeModal();
             if (t) {
               const oldDueAt = t.dueAt;
 
-              Object.assign(t, fields);
+              Object.assign(
+                t,
+                fields,
+              );
 
               /*
-               * 原本的瀏覽器提醒重新等待。
+               * App / 瀏覽器提醒重新等待。
                */
               t.notified = false;
 
               /*
-               * 如果提醒日期／時間有改，
-               * 後端 Email 也重新等待寄送。
+               * 如果提醒時間有變動，
+               * Email 也必須重新等待寄送。
                */
               if (
                 !oldDueAt ||
@@ -4074,8 +4102,8 @@ closeModal();
               }
 
               /*
-               * 任務內容修改後，
-               * 原本的 AI 圖不要繼續沿用。
+               * 任務內容改變，
+               * 舊的 AI 圖片不要沿用。
                */
               t.aiImageUrl = null;
             }
@@ -4085,40 +4113,42 @@ closeModal();
             );
           }
 
-          /* =========================
+
+          /* ============================================================
              新增任務
-             ========================= */
+             ============================================================ */
           else {
             const newTask = {
               id: crypto.randomUUID(),
 
               title,
               content,
+
               date,
               time,
 
               /*
-               * 給後端排程使用的真正時間。
-               * 台灣時間會轉成 UTC ISO。
+               * 給背景 Email Worker 使用。
                */
               dueAt,
 
               done: false,
 
               /*
-               * notified：
-               * 前端瀏覽器通知
+               * 前端瀏覽器 / App 提醒。
                */
               notified: false,
 
               /*
-               * emailNotified：
-               * 後端 Email 是否真的寄過
+               * 後端 Email 提醒。
                */
               emailNotified: false,
 
               emailNotifiedAt: null,
 
+              /*
+               * Email 中使用的松鼠圖片。
+               */
               aiImageUrl: null,
 
               createdAt:
@@ -4134,7 +4164,52 @@ closeModal();
             );
           }
 
+
+          /* ============================================================
+             保存任務
+             ============================================================ */
+
+          /*
+           * Step 1：
+           * 先存 localStorage。
+           */
           save();
+
+          /*
+           * Step 2：
+           *
+           * save() 本來會用 600ms debounce
+           * 等一下才把資料送到 Supabase。
+           *
+           * 任務提醒不能冒這個風險，
+           * 因為使用者可能建立任務後馬上把網站關掉。
+           *
+           * 所以取消那個等待。
+           */
+          clearTimeout(cloudSyncTimer);
+
+          /*
+           * Step 3：
+           * 直接等 Supabase 寫入完成。
+           */
+          try {
+            await pushCloudDataNow();
+
+            console.log(
+              "✅ 任務已立即同步到 Supabase",
+            );
+          } catch (error) {
+            console.error(
+              "❌ 任務立即同步 Supabase 失敗",
+              error,
+            );
+          }
+
+
+          /*
+           * Step 4：
+           * 雲端同步完成之後才更新畫面與關閉視窗。
+           */
           render();
           closeModal();
         });
