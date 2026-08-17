@@ -2652,11 +2652,9 @@
       /* ================================================================
          JS 03｜執行中狀態、DOM 快取與共用工具
          ================================================================ */
-      let tasks =
-        let tasks = (
+      let tasks = (
         JSON.parse(
-          localStorage.getItem("nutnut_v9_tasks") ||
-            "null",
+          localStorage.getItem("nutnut_v9_tasks") || "null",
         ) || defaultTasks
       ).map(normalizeReminderTask);
       
