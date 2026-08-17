@@ -3977,16 +3977,40 @@ async function clearFriendsListForDemo() {
         if (!t) return;
         if (confirm(`刪除「${t.title}」？`)) {
           tasks = tasks.filter((x) => x.id !== editingId);
-          save();
-          render();
-          closeModal();
+/*
+ * 任務先存本機。
+ */
+save();
+
+/*
+ * save() 原本會排一個 600ms debounce。
+ * 任務提醒不能等，取消這個等待，
+ * 直接同步到 Supabase。
+ */
+clearTimeout(cloudSyncTimer);
+
+try {
+  await pushCloudDataNow();
+
+  console.log(
+    "✅ 任務已立即同步到 Supabase",
+  );
+} catch (error) {
+  console.error(
+    "❌ 任務立即同步失敗",
+    error,
+  );
+}
+
+render();
+closeModal();
           showToast("任務已刪除");
         }
       });
 
       document
         .getElementById("taskForm")
-        .addEventListener("submit", (e) => {
+        .addEventListener("submit", async (e) => {
           e.preventDefault();
 
           syncTimeInputFromPicker();
