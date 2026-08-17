@@ -2658,7 +2658,6 @@
         ) || defaultTasks
       ).map(normalizeReminderTask);
       
-        defaultTasks;
       /* 完成紀錄：每完成一次任務就新增一筆快照，永久保存，
    即使之後取消勾選、編輯或刪除任務都不會被動到，供之後做數據分析。 */
       let completionLog = JSON.parse(
