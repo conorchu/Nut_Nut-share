@@ -3950,7 +3950,7 @@ async function clearFriendsListForDemo() {
 
       /* v10.1 新增：你自己的後端網址（負責保管 Gemini 金鑰、即時生成每個任務專屬的松鼠圖）
    部署好之後貼在這裡，格式像 https://nutnut-backend.vercel.app（結尾不要加斜線） */
-      const BACKEND_URL = "nutnut-backend-v2.vercel.app";
+      const BACKEND_URL = "https://nutnut-backend-v2.vercel.app";
       const backendReady = () => BACKEND_URL && !BACKEND_URL.includes("請貼上");
 
       const emailReady = () =>
