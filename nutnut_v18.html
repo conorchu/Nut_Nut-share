@@ -6142,7 +6142,641 @@ async function clearFriendsListForDemo() {
      
 
 </body>
+<!-- ================================================================
+     🐿️ Nut Nut User Behavior System //0822
+     V1.2｜Behavior → Supabase
+
+     功能：
+     1. 讀取 localStorage 的 Behavior Events
+     2. 找出尚未同步的事件
+     3. 寫入 public.behavior_events
+     4. 成功後記錄 synced event_id
+     5. 同步失敗不刪除本機資料
+     
+     不修改：
+     - tasks
+     - completionLog
+     - save()
+     - toggleTask()
+     - Email
+     - Vercel Backend
+================================================================ -->
+
+<script>
+(function () {
+
+  "use strict";
+
+
+  console.log(
+    "🐿️ Nut Nut Behavior → Supabase V1.2 啟動"
+  );
+
+
+  /* ================================================================
+     01｜設定
+     ================================================================ */
+
+  const BEHAVIOR_STORAGE_KEY =
+    "nutnut_behavior_events_v1";
+
+  const BEHAVIOR_SYNC_KEY =
+    "nutnut_behavior_synced_events_v1";
+
+
+  /* ================================================================
+     02｜取得本機 Behavior Events
+     ================================================================ */
+
+  function getBehaviorEvents() {
+
+    try {
+
+      const raw =
+        localStorage.getItem(
+          BEHAVIOR_STORAGE_KEY
+        );
+
+
+      if (!raw) {
+
+        return [];
+
+      }
+
+
+      const parsed =
+        JSON.parse(raw);
+
+
+      return Array.isArray(parsed)
+        ? parsed
+        : [];
+
+
+    } catch (error) {
+
+      console.warn(
+        "🐿️ Behavior：無法讀取本機資料",
+        error
+      );
+
+      return [];
+
+    }
+
+  }
+
+
+  /* ================================================================
+     03｜取得已同步 Event ID
+     ================================================================ */
+
+  function getSyncedEventIds() {
+
+    try {
+
+      const raw =
+        localStorage.getItem(
+          BEHAVIOR_SYNC_KEY
+        );
+
+
+      if (!raw) {
+
+        return [];
+
+      }
+
+
+      const parsed =
+        JSON.parse(raw);
+
+
+      return Array.isArray(parsed)
+        ? parsed
+        : [];
+
+
+    } catch (error) {
+
+      return [];
+
+    }
+
+  }
+
+
+  /* ================================================================
+     04｜保存已同步 Event ID
+     ================================================================ */
+
+  function saveSyncedEventIds(ids) {
+
+    try {
+
+      localStorage.setItem(
+        BEHAVIOR_SYNC_KEY,
+        JSON.stringify(ids)
+      );
+
+    } catch (error) {
+
+      console.warn(
+        "🐿️ Behavior：同步狀態保存失敗",
+        error
+      );
+
+    }
+
+  }
+
+
+  /* ================================================================
+     05｜取得目前登入使用者
+     ================================================================ */
+
+  function getSupabaseUser() {
+
+    try {
+
+      /*
+       * 沿用 V18 原本的 currentUser。
+       * 不建立第二套登入系統。
+       */
+
+      if (
+        typeof currentUser !== "undefined"
+        &&
+        currentUser
+        &&
+        currentUser.id
+      ) {
+
+        return currentUser;
+
+      }
+
+    } catch (error) {}
+
+
+    return null;
+
+  }
+
+
+  /* ================================================================
+     06｜取得 Supabase Client
+     ================================================================ */
+
+  function getSupabaseClient() {
+
+    try {
+
+      if (
+        typeof sbClient !== "undefined"
+        &&
+        sbClient
+      ) {
+
+        return sbClient;
+
+      }
+
+    } catch (error) {}
+
+
+    return null;
+
+  }
+
+
+  /* ================================================================
+     07｜核心同步
+     ================================================================ */
+
+  async function syncBehaviorEvents() {
+
+    const user =
+      getSupabaseUser();
+
+
+    if (!user) {
+
+      console.log(
+        "🐿️ Behavior：尚未登入，暫不同步"
+      );
+
+      return {
+
+        success: false,
+
+        reason:
+          "not_logged_in",
+
+        synced: 0
+
+      };
+
+    }
+
+
+    const client =
+      getSupabaseClient();
+
+
+    if (!client) {
+
+      console.warn(
+        "🐿️ Behavior：Supabase Client 尚未準備好"
+      );
+
+      return {
+
+        success: false,
+
+        reason:
+          "supabase_not_ready",
+
+        synced: 0
+
+      };
+
+    }
+
+
+    const events =
+      getBehaviorEvents();
+
+
+    if (!events.length) {
+
+      console.log(
+        "🐿️ Behavior：沒有本機事件"
+      );
+
+      return {
+
+        success: true,
+
+        synced: 0
+
+      };
+
+    }
+
+
+    const syncedIds =
+      getSyncedEventIds();
+
+
+    const pendingEvents =
+      events.filter(
+        function (event) {
+
+          return (
+            event
+            &&
+            event.event_id
+            &&
+            !syncedIds.includes(
+              event.event_id
+            )
+          );
+
+        }
+      );
+
+
+    if (!pendingEvents.length) {
+
+      console.log(
+        "🐿️ Behavior：全部事件都已同步"
+      );
+
+      return {
+
+        success: true,
+
+        synced: 0
+
+      };
+
+    }
+
+
+    console.log(
+      "🐿️ Behavior：準備同步",
+      pendingEvents.length,
+      "筆"
+    );
+
+
+    /* ============================================================
+       08｜轉換 Supabase 欄位
+       ============================================================ */
+
+    const rows =
+      pendingEvents.map(
+        function (event) {
+
+          return {
+
+            event_id:
+              event.event_id,
+
+            user_id:
+              user.id,
+
+            device_user_id:
+              event.user_id || null,
+
+            session_id:
+              event.session_id || null,
+
+            event_name:
+              event.event_name,
+
+            event_time:
+              event.event_time,
+
+            task_id:
+              event.task_id
+                ? String(event.task_id)
+                : null,
+
+            metadata:
+              event.metadata
+              &&
+              typeof event.metadata === "object"
+                ? event.metadata
+                : {}
+
+          };
+
+        }
+      );
+
+
+    /* ============================================================
+       09｜寫入 Supabase
+       ============================================================ */
+
+    try {
+
+      const {
+        data,
+        error
+      } = await client
+
+        .from(
+          "behavior_events"
+        )
+
+        .upsert(
+          rows,
+          {
+            onConflict:
+              "event_id"
+          }
+        )
+
+        .select(
+          "event_id"
+        );
+
+
+      if (error) {
+
+        console.error(
+          "❌ Behavior Events Supabase 同步失敗",
+          error
+        );
+
+        return {
+
+          success: false,
+
+          synced: 0,
+
+          error:
+            error.message
+
+        };
+
+      }
+
+
+      const returnedIds =
+        Array.isArray(data)
+          ? data.map(
+              function (row) {
+
+                return row.event_id;
+
+              }
+            )
+          : pendingEvents.map(
+              function (event) {
+
+                return event.event_id;
+
+              }
+            );
+
+
+      const newSyncedIds =
+        [
+          ...new Set(
+            [
+              ...syncedIds,
+              ...returnedIds
+            ]
+          )
+        ];
+
+
+      saveSyncedEventIds(
+        newSyncedIds
+      );
+
+
+      console.log(
+        "✅ Behavior Events 已同步：",
+        returnedIds.length,
+        "筆"
+      );
+
+
+      return {
+
+        success: true,
+
+        synced:
+          returnedIds.length
+
+      };
+
+
+    } catch (error) {
+
+      console.error(
+        "❌ Behavior Sync 發生錯誤",
+        error
+      );
+
+
+      /*
+       * 不刪 localStorage。
+       * 下次仍然可以重試。
+       */
+
+      return {
+
+        success: false,
+
+        synced: 0,
+
+        error:
+          error.message
+
+      };
+
+    }
+
+  }
+
+
+  /* ================================================================
+     10｜提供 Console 測試
+     ================================================================ */
+
+  window.syncNutNutBehavior =
+    syncBehaviorEvents;
+
+
+  window.getNutNutBehaviorSyncStatus =
+    function () {
+
+      const events =
+        getBehaviorEvents();
+
+
+      const syncedIds =
+        getSyncedEventIds();
+
+
+      return {
+
+        total:
+          events.length,
+
+        synced:
+          events.filter(
+            function (event) {
+
+              return syncedIds.includes(
+                event.event_id
+              );
+
+            }
+          ).length,
+
+        pending:
+          events.filter(
+            function (event) {
+
+              return !syncedIds.includes(
+                event.event_id
+              );
+
+            }
+          ).length
+
+      };
+
+    };
+
+
+  /* ================================================================
+     11｜登入後自動嘗試同步
+     ================================================================ */
+
+  let attempts = 0;
+
+
+  const timer =
+    setInterval(
+      async function () {
+
+        attempts++;
+
+
+        if (
+          attempts > 30
+        ) {
+
+          clearInterval(
+            timer
+          );
+
+          return;
+
+        }
+
+
+        const user =
+          getSupabaseUser();
+
+
+        if (!user) {
+
+          return;
+
+        }
+
+
+        clearInterval(
+          timer
+        );
+
+
+        console.log(
+          "🐿️ 偵測到登入，開始同步 Behavior Events..."
+        );
+
+
+        await syncBehaviorEvents();
+
+
+      },
+      1000
+    );
+
+
+  /* ================================================================
+     12｜完成
+     ================================================================ */
+
+  console.log(
+    "✅ Behavior → Supabase V1.2 已載入"
+  );
+
+
+  console.log(
+    "👉 手動同步：syncNutNutBehavior()"
+  );
+
+
+  console.log(
+    "👉 查看同步狀態：getNutNutBehaviorSyncStatus()"
+  );
+
+
+})();
+</script>
+
 </html>
 
 
-/*0821*/
+/*0822*/
