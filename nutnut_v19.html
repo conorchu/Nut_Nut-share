@@ -2807,28 +2807,52 @@
         const badge = document.getElementById("notifBadge");
         const list = document.getElementById("notifList");
         if (!badge || !list) return;
+
         const unread = unreadNotifCount();
+
         badge.style.display = unread ? "flex" : "none";
-        badge.textContent = unread > 99 ? "99+" : String(unread);
+
+        badge.textContent =
+          unread > 99
+            ? "99+"
+            : String(unread);
 
         if (!notifications.length) {
-          list.innerHTML = '<div class="notif-empty">目前沒有通知</div>';
+
+          list.innerHTML =
+            '<div class="notif-empty">目前沒有通知</div>';
+
           return;
         }
-        list.innerHTML = notifications
-          .slice()
-          .reverse()
-          .map(
-            (n) => `
-    <div class="notif-item${n.read ? "" : " unread"}">
-      <span class="notif-icon">${NOTIF_ICONS[n.type] || "🔔"}</span>
-      <div>
-        <div class="notif-text">${escapeHtml(n.text)}</div>
-        <div class="notif-time">${formatFriendChatTime(n.time)}</div>
-      </div>
-    </div>`,
-          )
-          .join("");
+
+        list.innerHTML =
+          notifications
+            .slice()
+            .reverse()
+            .map(
+              (n) => `
+                <div class="notif-item${n.read ? "" : " unread"}">
+
+                  <span class="notif-icon">
+                    ${NOTIF_ICONS[n.type] || "🔔"}
+                  </span>
+
+                  <div>
+
+                    <div class="notif-text">
+                      ${escapeHtml(n.text)}
+                    </div>
+
+                    <div class="notif-time">
+                      ${formatFriendChatTime(n.time)}
+                    </div>
+
+                  </div>
+
+                </div>
+              `,
+            )
+            .join("");
       }
 
       function toggleNotifPanel(forceState) {
@@ -2868,6 +2892,10 @@
           toggleNotifPanel(false);
       });
       renderNotifications();
+
+      /* ============================================================
+         JS 03B｜Smart Suggestion（統一模組移至檔案底部）
+         ============================================================ */
 
       /* ================================================================
          JS 04｜互動功能：語音、商店、朋友與聊天室
@@ -4966,6 +4994,11 @@ async function clearFriendsListForDemo() {
           });
           area.appendChild(card);
         });
+
+        /* Smart Suggestion 與隱藏週期共用推薦區，但只由自己的卡片負責更新。 */
+        if (typeof renderNutNutSmartSuggestion === "function") {
+          renderNutNutSmartSuggestion();
+        }
       }
 
       /* ---------- Demo 小工具：在 Console 輸入 seedCycleDemo() 可注入
@@ -6141,7 +6174,7 @@ async function clearFriendsListForDemo() {
 </script>
      
 
-</body>
+<!-- </body> -->
 <!-- ================================================================
      🐿️ Nut Nut User Behavior System //0822
      V1.2｜Behavior → Supabase
@@ -6776,7 +6809,449 @@ async function clearFriendsListForDemo() {
 })();
 </script>
 
+
+
+
+<script>
+/* ============================================================
+   🐿️ Nut Nut Smart Suggestion｜V19 Clean
+
+   流程：
+   Supabase pending suggestion
+        ↓
+   顯示卡片
+        ↓
+   「先不要」→ dismissed
+   「幫我安排」→ V18 原本 Task Form
+        ↓
+   找到真正 task_id
+        ↓
+   task_create Behavior Event
+        ↓
+   localStorage → syncNutNutBehavior()
+        ↓
+   smart_suggestions.status = accepted
+   ============================================================ */
+(function () {
+  "use strict";
+
+  function getCurrentNutNutUser() {
+    try { return (typeof currentUser !== "undefined" && currentUser) ? currentUser : null; }
+    catch (_) { return null; }
+  }
+
+  function getNutNutSupabaseClient() {
+    try { return (typeof sbClient !== "undefined" && sbClient) ? sbClient : null; }
+    catch (_) { return null; }
+  }
+
+  function escapeSuggestionHtml(value) {
+    return String(value ?? "").replace(/[&<>"']/g, function (ch) {
+      return ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#039;"
+      })[ch];
+    });
+  }
+
+  async function loadNutNutSmartSuggestion() {
+    const user = getCurrentNutNutUser();
+    const client = getNutNutSupabaseClient();
+
+    if (!user || !client) return null;
+
+    try {
+      const { data, error } = await client
+        .from("smart_suggestions")
+        .select(`
+          suggestion_id,
+          title,
+          message,
+          suggested_date,
+          suggested_hour,
+          status,
+          expires_at
+        `)
+        .eq("user_id", user.id)
+        .eq("status", "pending")
+        .order("created_at", { ascending: false })
+        .limit(1);
+
+      if (error) {
+        console.error("❌ Smart Suggestion 讀取失敗", error);
+        return null;
+      }
+
+      if (!data || !data.length) return null;
+
+      const suggestion = data[0];
+
+      /* 已過期的建議不顯示。 */
+      if (suggestion.expires_at) {
+        const expiresAt = new Date(suggestion.expires_at);
+        if (!Number.isNaN(expiresAt.getTime()) && expiresAt.getTime() <= Date.now()) {
+          await client
+            .from("smart_suggestions")
+            .update({ status: "expired", responded_at: new Date().toISOString() })
+            .eq("suggestion_id", suggestion.suggestion_id)
+            .eq("user_id", user.id)
+            .eq("status", "pending");
+          return null;
+        }
+      }
+
+      return suggestion;
+    } catch (error) {
+      console.error("❌ Smart Suggestion 發生錯誤", error);
+      return null;
+    }
+  }
+
+  function removeSmartSuggestionCard() {
+    const old = document.getElementById("nutNutSmartSuggestionCard");
+    if (old) old.remove();
+  }
+
+  async function renderNutNutSmartSuggestion() {
+    const area = document.getElementById("recoArea");
+    if (!area) return;
+
+    removeSmartSuggestionCard();
+
+    const suggestion = await loadNutNutSmartSuggestion();
+    if (!suggestion) return;
+
+    const card = document.createElement("div");
+    card.id = "nutNutSmartSuggestionCard";
+    card.dataset.suggestionId = String(suggestion.suggestion_id);
+    card.style.cssText = `
+      margin-bottom:16px;
+      padding:18px;
+      border-radius:16px;
+      background:#fff8df;
+      border:1px solid #f1df9a;
+      box-shadow:0 4px 12px rgba(0,0,0,0.06);
+    `;
+
+    const dateText = suggestion.suggested_date
+      ? escapeSuggestionHtml(String(suggestion.suggested_date).slice(0, 10))
+      : "";
+
+    const hourRaw = suggestion.suggested_hour;
+    let hourText = "";
+    if (hourRaw !== null && hourRaw !== undefined && String(hourRaw).trim() !== "") {
+      const raw = String(hourRaw).trim();
+      if (/^\d{1,2}:\d{2}$/.test(raw)) {
+        hourText = raw;
+      } else if (/^\d{1,2}$/.test(raw)) {
+        hourText = String(Number(raw)).padStart(2, "0") + ":00";
+      }
+    }
+
+    card.innerHTML = `
+      <div style="display:flex;align-items:flex-start;gap:12px;">
+        <div style="font-size:32px;line-height:1;">🐿️</div>
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:17px;font-weight:700;margin-bottom:6px;">
+            ${escapeSuggestionHtml(suggestion.title || "Nut Nut 有個小建議")}
+          </div>
+          <div style="font-size:14px;line-height:1.6;color:#555;">
+            ${escapeSuggestionHtml(suggestion.message || "")}
+          </div>
+          ${dateText ? `
+            <div style="margin-top:8px;font-size:13px;color:#888;">
+              建議時間：${dateText}${hourText ? " " + escapeSuggestionHtml(hourText) : ""}
+            </div>` : ""}
+          <div style="display:flex;gap:8px;margin-top:14px;">
+            <button type="button" class="primary" data-action="accept-smart-suggestion">
+              幫我安排
+            </button>
+            <button type="button" data-action="dismiss-smart-suggestion"
+              style="padding:8px 14px;border:1px solid #ddd;border-radius:10px;background:#fff;cursor:pointer;">
+              先不要
+            </button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    /* Smart Suggestion 放在推薦區最上方，不會蓋掉原本週期推薦。 */
+    area.prepend(card);
+
+    card.querySelector('[data-action="accept-smart-suggestion"]')?.addEventListener("click", async function () {
+      const button = this;
+      button.disabled = true;
+      button.textContent = "安排中…";
+
+      const success = await acceptNutNutSmartSuggestion(suggestion);
+      if (!success) {
+        button.disabled = false;
+        button.textContent = "幫我安排";
+      }
+    });
+
+    card.querySelector('[data-action="dismiss-smart-suggestion"]')?.addEventListener("click", async function () {
+      const user = getCurrentNutNutUser();
+      const client = getNutNutSupabaseClient();
+      if (!user || !client) {
+        card.remove();
+        return;
+      }
+
+      const { error } = await client
+        .from("smart_suggestions")
+        .update({ status: "dismissed", responded_at: new Date().toISOString() })
+        .eq("suggestion_id", suggestion.suggestion_id)
+        .eq("user_id", user.id)
+        .eq("status", "pending");
+
+      if (error) {
+        console.error("❌ Smart Suggestion dismiss 失敗", error);
+        return;
+      }
+
+      card.remove();
+      if (typeof showToast === "function") showToast("好的，先不要安排 🐿️");
+    });
+  }
+
+  function normalizeSuggestionHour(value) {
+    const raw = String(value ?? "").trim();
+
+    if (/^\d{1,2}:\d{2}$/.test(raw)) {
+      const parts = raw.split(":");
+      const hour = Number(parts[0]);
+      const minute = Number(parts[1]);
+      if (hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59) {
+        return String(hour).padStart(2, "0") + ":" + String(minute).padStart(2, "0");
+      }
+    }
+
+    if (/^\d{1,2}$/.test(raw)) {
+      const hour = Number(raw);
+      if (hour >= 0 && hour <= 23) return String(hour).padStart(2, "0") + ":00";
+    }
+
+    return null;
+  }
+
+  async function acceptNutNutSmartSuggestion(suggestionFromCard) {
+    const user = getCurrentNutNutUser();
+    const client = getNutNutSupabaseClient();
+    const card = document.getElementById("nutNutSmartSuggestionCard");
+
+    if (!user || !client || !card) {
+      console.warn("🐿️ Smart Suggestion：無法取得登入使用者或 Supabase");
+      return false;
+    }
+
+    const suggestionId = card.dataset.suggestionId;
+    if (!suggestionId) return false;
+
+    let suggestion = null;
+
+    try {
+      const { data, error } = await client
+        .from("smart_suggestions")
+        .select(`
+          suggestion_id,
+          title,
+          message,
+          suggested_date,
+          suggested_hour,
+          status,
+          expires_at
+        `)
+        .eq("suggestion_id", suggestionId)
+        .eq("user_id", user.id)
+        .eq("status", "pending")
+        .maybeSingle();
+
+      if (error) {
+        console.error("❌ Smart Suggestion 重新讀取失敗", error);
+        return false;
+      }
+
+      if (!data) {
+        console.warn("🐿️ Smart Suggestion：這筆建議已不存在或已被處理");
+        card.remove();
+        return false;
+      }
+
+      suggestion = data;
+    } catch (error) {
+      console.error("❌ Smart Suggestion 重新讀取發生錯誤", error);
+      return false;
+    }
+
+    if (!suggestion.title || !suggestion.suggested_date || suggestion.suggested_hour === null || suggestion.suggested_hour === undefined) {
+      console.error("❌ Smart Suggestion 缺少建立 Task 所需資料", suggestion);
+      return false;
+    }
+
+    const suggestedTime = normalizeSuggestionHour(suggestion.suggested_hour);
+    if (!suggestedTime) {
+      console.error("❌ Smart Suggestion：suggested_hour 無法解析", suggestion.suggested_hour);
+      return false;
+    }
+
+    const taskForm = document.getElementById("taskForm");
+    const titleInput = document.getElementById("titleInput");
+    const contentInput = document.getElementById("contentInput");
+    const dateInput = document.getElementById("dateInput");
+    const periodInput = document.getElementById("periodInput");
+    const hourInput = document.getElementById("hourInput");
+    const minuteInput = document.getElementById("minuteInput");
+    const timeInput = document.getElementById("timeInput");
+    const fabAdd = document.getElementById("fabAdd");
+
+    if (!taskForm || !titleInput || !contentInput || !dateInput || !periodInput || !hourInput || !minuteInput || !timeInput || !fabAdd) {
+      console.error("❌ Smart Suggestion：找不到 V18 Task Form 欄位");
+      return false;
+    }
+
+    let taskIdsBefore = [];
+    try {
+      if (typeof tasks !== "undefined" && Array.isArray(tasks)) {
+        taskIdsBefore = tasks.map(task => String(task.id));
+      }
+    } catch (_) {}
+
+    /* 開啟 V18 原本的新增任務視窗。 */
+    fabAdd.click();
+
+    titleInput.value = String(suggestion.title).trim();
+    contentInput.value = String(suggestion.message || "").trim();
+    dateInput.value = String(suggestion.suggested_date).slice(0, 10);
+
+    const parts = suggestedTime.split(":");
+    const hour24 = Number(parts[0]);
+    const minute = String(parts[1]).padStart(2, "0");
+    const hour12 = hour24 % 12 || 12;
+
+    periodInput.value = hour24 >= 12 ? "PM" : "AM";
+    hourInput.value = String(hour12).padStart(2, "0");
+    minuteInput.value = minute;
+    timeInput.value = suggestedTime;
+
+    if (!taskForm.checkValidity()) {
+      console.error("❌ Smart Suggestion：Task Form 驗證失敗");
+      return false;
+    }
+
+    try {
+      taskForm.requestSubmit();
+    } catch (error) {
+      console.error("❌ Smart Suggestion：Task 建立失敗", error);
+      return false;
+    }
+
+    let createdTask = null;
+    try {
+      if (typeof tasks !== "undefined" && Array.isArray(tasks)) {
+        createdTask = tasks.find(task => !taskIdsBefore.includes(String(task.id)));
+
+        if (!createdTask) {
+          createdTask = tasks.find(task =>
+            String(task.title || "").trim() === String(suggestion.title).trim() &&
+            String(task.date || "").slice(0, 10) === String(suggestion.suggested_date).slice(0, 10) &&
+            String(task.time || "") === suggestedTime
+          );
+        }
+      }
+    } catch (error) {
+      console.error("❌ 無法取得剛建立的 Task", error);
+    }
+
+    if (!createdTask) {
+      console.error("❌ Smart Suggestion：Task 建立後找不到 newTask");
+      return false;
+    }
+
+    /* 建立 task_create Behavior Event。 */
+    try {
+      const key = "nutnut_behavior_events_v1";
+      let events = [];
+      try {
+        const parsed = JSON.parse(localStorage.getItem(key) || "[]");
+        if (Array.isArray(parsed)) events = parsed;
+      } catch (_) {}
+
+      const createdTaskId = String(createdTask.id);
+      const alreadyLogged = events.some(event =>
+        event && event.event_name === "task_create" && String(event.task_id) === createdTaskId
+      );
+
+      if (!alreadyLogged) {
+        events.push({
+          event_id: crypto.randomUUID(),
+          event_name: "task_create",
+          event_time: new Date().toISOString(),
+          user_id: user.id,
+          session_id: null,
+          task_id: createdTaskId,
+          metadata: {
+            title: String(createdTask.title || ""),
+            content_length: String(createdTask.content || "").length,
+            date: createdTask.date || null,
+            time: createdTask.time || null,
+            task_type: createdTask.task_type ?? createdTask.type ?? null,
+            has_reminder: Boolean(
+              createdTask.app || createdTask.email || createdTask.has_reminder || createdTask.reminder || true
+            )
+          }
+        });
+
+        localStorage.setItem(key, JSON.stringify(events));
+
+        if (typeof syncNutNutBehavior === "function") {
+          await syncNutNutBehavior();
+        }
+      }
+    } catch (error) {
+      console.error("❌ 建立 task_create Behavior Event 失敗", error);
+    }
+
+    /* Task 確定建立成功後，才把 Suggestion 標記 accepted。 */
+    try {
+      const { error } = await client
+        .from("smart_suggestions")
+        .update({ status: "accepted", responded_at: new Date().toISOString() })
+        .eq("suggestion_id", suggestionId)
+        .eq("user_id", user.id)
+        .eq("status", "pending");
+
+      if (error) {
+        console.error("❌ Smart Suggestion accepted 更新失敗", error);
+        return false;
+      }
+    } catch (error) {
+      console.error("❌ Smart Suggestion accepted 更新發生錯誤", error);
+      return false;
+    }
+
+    card.remove();
+    if (typeof showToast === "function") showToast("已幫你安排完成 🐿️");
+    return true;
+  }
+
+  window.getCurrentNutNutUser = getCurrentNutNutUser;
+  window.getNutNutSupabaseClient = getNutNutSupabaseClient;
+  window.loadNutNutSmartSuggestion = loadNutNutSmartSuggestion;
+  window.renderNutNutSmartSuggestion = renderNutNutSmartSuggestion;
+  window.acceptNutNutSmartSuggestion = acceptNutNutSmartSuggestion;
+
+  /* 等前面的 V18 DOM / Supabase / Behavior 模組完成後再首次載入。 */
+  window.addEventListener("load", function () {
+    renderNutNutSmartSuggestion();
+  });
+
+  console.log("✅ Nut Nut Smart Suggestion V19 Clean 已載入");
+})();
+</script>
+
+</body>
 </html>
-
-
-/*0822*/
