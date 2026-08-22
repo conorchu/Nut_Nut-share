@@ -5036,7 +5036,1112 @@ async function clearFriendsListForDemo() {
         showApp();
       }
     </script>
-  </body>
+
+    /*--2026/08/21--*/
+  <!-- ================================================================
+     🐿️ Nut Nut User Behavior System V1.1
+     
+     這一版正式追蹤：
+     App / Session / Page / Task / Shop / Notification
+     
+     安全原則：
+     1. 不修改 V18 原本任務邏輯
+     2. 不修改 Supabase
+     3. 不修改 completionLog
+     4. Behavior 出錯不影響 App
+     5. 目前只存 localStorage
+     ================================================================ -->
+
+<script>
+(function () {
+  "use strict";
+
+  console.log("🐿️ Nut Nut User Behavior System V1.1 啟動");
+
+
+  /* ================================================================
+     01｜設定
+     ================================================================ */
+
+  const STORAGE_KEY =
+    "nutnut_behavior_events_v1";
+
+  const MAX_EVENTS = 5000;
+
+
+  /* ================================================================
+     02｜Session
+     ================================================================ */
+
+  let SESSION_ID;
+
+  try {
+
+    SESSION_ID =
+      sessionStorage.getItem(
+        "nutnut_behavior_session_v1"
+      );
+
+    if (!SESSION_ID) {
+
+      SESSION_ID =
+        crypto.randomUUID();
+
+      sessionStorage.setItem(
+        "nutnut_behavior_session_v1",
+        SESSION_ID
+      );
+
+    }
+
+  } catch (error) {
+
+    SESSION_ID =
+      "session_" +
+      Date.now();
+
+  }
+
+
+  /* ================================================================
+     03｜User ID
+     ================================================================ */
+
+  function getUserId() {
+
+    /*
+     * 優先使用 Nut Nut V18 原本的 NUT_USER_ID
+     */
+
+    try {
+
+      if (
+        typeof NUT_USER_ID !== "undefined" &&
+        NUT_USER_ID
+      ) {
+
+        return NUT_USER_ID;
+
+      }
+
+    } catch (error) {}
+
+
+    /*
+     * 如果沒有，就建立匿名 ID。
+     */
+
+    try {
+
+      const key =
+        "nutnut_behavior_anonymous_user_v1";
+
+      let id =
+        localStorage.getItem(key);
+
+      if (!id) {
+
+        id =
+          crypto.randomUUID();
+
+        localStorage.setItem(
+          key,
+          id
+        );
+
+      }
+
+      return id;
+
+    } catch (error) {
+
+      return "anonymous";
+
+    }
+
+  }
+
+
+  /* ================================================================
+     04｜讀取 Behavior
+     ================================================================ */
+
+  let events = [];
+
+  try {
+
+    const raw =
+      localStorage.getItem(
+        STORAGE_KEY
+      );
+
+    if (raw) {
+
+      const parsed =
+        JSON.parse(raw);
+
+      if (Array.isArray(parsed)) {
+
+        events = parsed;
+
+      }
+
+    }
+
+  } catch (error) {
+
+    console.warn(
+      "🐿️ Behavior Log 讀取失敗",
+      error
+    );
+
+  }
+
+
+  /* ================================================================
+     05｜核心：trackBehavior
+     ================================================================ */
+
+  function trackBehavior(
+    eventName,
+    options = {}
+  ) {
+
+    try {
+
+      const event = {
+
+        event_id:
+          crypto.randomUUID(),
+
+        user_id:
+          getUserId(),
+
+        session_id:
+          SESSION_ID,
+
+        event_name:
+          eventName,
+
+        event_time:
+          new Date().toISOString(),
+
+        task_id:
+          options.task_id || null,
+
+        metadata:
+          options.metadata || {}
+
+      };
+
+
+      events.push(event);
+
+
+      /*
+       * 最多保存 5000 筆
+       */
+
+      if (
+        events.length >
+        MAX_EVENTS
+      ) {
+
+        events =
+          events.slice(
+            -MAX_EVENTS
+          );
+
+      }
+
+
+      localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify(events)
+      );
+
+
+      console.log(
+        "🐿️ Nut Nut Behavior:",
+        event
+      );
+
+
+      return event;
+
+
+    } catch (error) {
+
+      /*
+       * Behavior 系統壞掉時，
+       * 絕對不能影響 Nut Nut。
+       */
+
+      console.warn(
+        "🐿️ Behavior Tracking 失敗",
+        error
+      );
+
+      return null;
+
+    }
+
+  }
+
+
+  /* ================================================================
+     06｜公開 API
+     ================================================================ */
+
+  window.NutNutBehavior = {
+
+    track:
+      trackBehavior,
+
+    getEvents:
+      function () {
+        return [...events];
+      },
+
+    clear:
+      function () {
+
+        events = [];
+
+        localStorage.removeItem(
+          STORAGE_KEY
+        );
+
+        console.log(
+          "🐿️ Behavior Log 已清除"
+        );
+
+      },
+
+    getSessionId:
+      function () {
+        return SESSION_ID;
+      },
+
+    getUserId:
+      function () {
+        return getUserId();
+      }
+
+  };
+
+
+  /*
+   * Console 快捷指令
+   */
+
+  window.getNutNutBehaviorEvents =
+    function () {
+
+      const result =
+        window.NutNutBehavior
+          .getEvents();
+
+      console.table(
+        result.map(
+          function (e) {
+
+            return {
+
+              event_name:
+                e.event_name,
+
+              event_time:
+                e.event_time,
+
+              user_id:
+                e.user_id,
+
+              session_id:
+                e.session_id,
+
+              task_id:
+                e.task_id,
+
+              metadata:
+                JSON.stringify(
+                  e.metadata
+                )
+
+            };
+
+          }
+        )
+      );
+
+      return result;
+
+    };
+
+
+  /* ================================================================
+     07｜App Open
+     ================================================================ */
+
+  trackBehavior(
+    "app_open",
+    {
+
+      metadata: {
+
+        language:
+          navigator.language ||
+          null,
+
+        platform:
+          navigator.platform ||
+          null,
+
+        screen_width:
+          window.innerWidth,
+
+        screen_height:
+          window.innerHeight
+
+      }
+
+    }
+  );
+
+
+  /* ================================================================
+     08｜Page / Navigation
+     ================================================================ */
+
+  document.addEventListener(
+    "click",
+    function (event) {
+
+      const button =
+        event.target.closest(
+          "button"
+        );
+
+      if (!button) return;
+
+
+      /*
+       * 導覽按鈕
+       */
+
+      const navButton =
+        button.closest(
+          "[data-panel]"
+        );
+
+      if (navButton) {
+
+        trackBehavior(
+          "page_view",
+          {
+
+            metadata: {
+
+              page:
+                navButton.dataset.panel ||
+                null,
+
+              label:
+                navButton.innerText
+                  ?.trim()
+                  .slice(0, 100) ||
+                null
+
+            }
+
+          }
+        );
+
+        return;
+
+      }
+
+
+      /*
+       * 松鼠區域
+       */
+
+      const squirrelArea =
+        button.closest(
+          "#squirrelPanel, .squirrel-panel"
+        );
+
+      if (squirrelArea) {
+
+        trackBehavior(
+          "squirrel_view",
+          {
+
+            metadata: {
+
+              label:
+                button.innerText
+                  ?.trim()
+                  .slice(0, 100) ||
+                null
+
+            }
+
+          }
+        );
+
+        return;
+
+      }
+
+
+      /*
+       * 商店
+       */
+
+      const shopArea =
+        button.closest(
+          "#shopPanel, .shop-panel, .shop-section"
+        );
+
+      if (shopArea) {
+
+        trackBehavior(
+          "shop_interaction",
+          {
+
+            metadata: {
+
+              label:
+                button.innerText
+                  ?.trim()
+                  .slice(0, 100) ||
+                null
+
+            }
+
+          }
+        );
+
+        return;
+
+      }
+
+
+      /*
+       * 通知
+       */
+
+      const notificationArea =
+        button.closest(
+          "#notificationPanel, .notification-panel, .notification-item"
+        );
+
+      if (notificationArea) {
+
+        trackBehavior(
+          "notification_click",
+          {
+
+            metadata: {
+
+              label:
+                button.innerText
+                  ?.trim()
+                  .slice(0, 100) ||
+                null
+
+            }
+
+          }
+        );
+
+      }
+
+    },
+
+    true
+
+  );
+
+
+  /* ================================================================
+     09｜Task：完成 / 取消完成
+     
+     這裡不修改 toggleTask。
+     
+     我們只觀察 .check 被點擊。
+     V18 原本仍然負責真正完成任務。
+     ================================================================ */
+
+  document.addEventListener(
+    "click",
+    function (event) {
+
+      const check =
+        event.target.closest(
+          ".check"
+        );
+
+      if (!check) return;
+
+
+      /*
+       * 找到任務卡
+       */
+
+      const taskElement =
+        check.closest(
+          ".task"
+        );
+
+      if (!taskElement) return;
+
+
+      /*
+       * 先取得畫面上的任務資訊。
+       */
+
+      const titleElement =
+        taskElement.querySelector(
+          ".task-name"
+        );
+
+      const contentElement =
+        taskElement.querySelector(
+          ".task-content"
+        );
+
+      const title =
+        titleElement
+          ?.textContent
+          ?.trim() ||
+        null;
+
+      const content =
+        contentElement
+          ?.textContent
+          ?.trim() ||
+        null;
+
+
+      /*
+       * 找到 V18 的 tasks。
+       */
+
+      let matchedTask = null;
+
+      try {
+
+        if (
+          typeof tasks !==
+          "undefined" &&
+          Array.isArray(tasks)
+        ) {
+
+          matchedTask =
+            tasks.find(
+              function (task) {
+
+                return (
+                  task.title === title &&
+                  (
+                    !content ||
+                    (task.content || "沒有補充內容")
+                      === content
+                  )
+                );
+
+              }
+            );
+
+        }
+
+      } catch (error) {}
+
+
+      /*
+       * 注意：
+       *
+       * Capture 階段發生在 V18 原本
+       * toggleTask 執行之前。
+       *
+       * 所以 matchedTask.done
+       * 是「點擊前」狀態。
+       */
+
+      const beforeDone =
+        matchedTask
+          ? Boolean(matchedTask.done)
+          : null;
+
+
+      /*
+       * 等 V18 原本 toggleTask 完成。
+       */
+
+      setTimeout(
+        function () {
+
+          let afterTask =
+            matchedTask;
+
+          try {
+
+            if (
+              typeof tasks !==
+              "undefined" &&
+              Array.isArray(tasks)
+            ) {
+
+              afterTask =
+                tasks.find(
+                  function (task) {
+
+                    return (
+                      task.title === title &&
+                      (
+                        !content ||
+                        (task.content || "沒有補充內容")
+                          === content
+                      )
+                    );
+
+                  }
+                ) ||
+                matchedTask;
+
+            }
+
+          } catch (error) {}
+
+
+          const afterDone =
+            afterTask
+              ? Boolean(afterTask.done)
+              : !beforeDone;
+
+
+          /*
+           * 完成
+           */
+
+          if (
+            afterDone === true
+          ) {
+
+            trackBehavior(
+              "task_complete",
+              {
+
+                task_id:
+                  afterTask?.id ||
+                  matchedTask?.id ||
+                  null,
+
+                metadata: {
+
+                  title:
+                    title,
+
+                  content_length:
+                    content
+                      ? content.length
+                      : 0,
+
+                  task_type:
+                    afterTask?.type ||
+                    null,
+
+                  date:
+                    afterTask?.date ||
+                    null,
+
+                  time:
+                    afterTask?.time ||
+                    null,
+
+                  completed_at:
+                    afterTask?.completedAt ||
+                    new Date().toISOString()
+
+                }
+
+              }
+            );
+
+          }
+
+
+          /*
+           * 取消完成
+           */
+
+          else {
+
+            trackBehavior(
+              "task_uncomplete",
+              {
+
+                task_id:
+                  afterTask?.id ||
+                  matchedTask?.id ||
+                  null,
+
+                metadata: {
+
+                  title:
+                    title,
+
+                  task_type:
+                    afterTask?.type ||
+                    null,
+
+                  date:
+                    afterTask?.date ||
+                    null,
+
+                  time:
+                    afterTask?.time ||
+                    null
+
+                }
+
+              }
+            );
+
+          }
+
+        },
+
+        0
+
+      );
+
+    },
+
+    true
+
+  );
+
+
+  /* ================================================================
+     10｜Task：新增 / 編輯
+     
+     我們不修改原本 taskForm。
+     只觀察它送出前後的 tasks。
+     ================================================================ */
+
+  const taskForm =
+    document.getElementById(
+      "taskForm"
+    );
+
+
+  if (taskForm) {
+
+    taskForm.addEventListener(
+      "submit",
+      function () {
+
+        let beforeIds = [];
+
+        try {
+
+          if (
+            typeof tasks !==
+              "undefined" &&
+            Array.isArray(tasks)
+          ) {
+
+            beforeIds =
+              tasks.map(
+                function (task) {
+                  return task.id;
+                }
+              );
+
+          }
+
+        } catch (error) {}
+
+
+        /*
+         * 等 V18 原本 submit handler
+         * 完成新增 / 編輯。
+         */
+
+        setTimeout(
+          function () {
+
+            try {
+
+              if (
+                typeof tasks ===
+                  "undefined" ||
+                !Array.isArray(tasks)
+              ) {
+
+                return;
+
+              }
+
+
+              /*
+               * 找出新增加的 task
+               */
+
+              const newTask =
+                tasks.find(
+                  function (task) {
+
+                    return !beforeIds.includes(
+                      task.id
+                    );
+
+                  }
+                );
+
+
+              if (newTask) {
+
+                trackBehavior(
+                  "task_create",
+                  {
+
+                    task_id:
+                      newTask.id,
+
+                    metadata: {
+
+                      title:
+                        newTask.title ||
+                        null,
+
+                      content_length:
+                        (
+                          newTask.content ||
+                          ""
+                        ).length,
+
+                      date:
+                        newTask.date ||
+                        null,
+
+                      time:
+                        newTask.time ||
+                        null,
+
+                      task_type:
+                        newTask.type ||
+                        null,
+
+                      has_reminder:
+                        Boolean(
+                          newTask.date &&
+                          newTask.time
+                        )
+
+                    }
+
+                  }
+                );
+
+                return;
+
+              }
+
+
+              /*
+               * 如果沒有新增，
+               * 很可能是編輯。
+               */
+
+              trackBehavior(
+                "task_edit",
+                {
+
+                  metadata: {
+
+                    note:
+                      "task form submitted without creating a new task"
+
+                  }
+
+                }
+              );
+
+
+            } catch (error) {
+
+              console.warn(
+                "🐿️ Task create/edit tracking 失敗",
+                error
+              );
+
+            }
+
+          },
+
+          0
+
+        );
+
+      },
+
+      true
+
+    );
+
+  }
+
+
+  /* ================================================================
+     11｜Task：刪除
+     ================================================================ */
+
+  const deleteButton =
+    document.getElementById(
+      "deleteTask"
+    );
+
+
+  if (deleteButton) {
+
+    deleteButton.addEventListener(
+      "click",
+      function () {
+
+        /*
+         * 先取得目前 editingId
+         * 對應的任務。
+         */
+
+        let taskBeforeDelete =
+          null;
+
+        try {
+
+          if (
+            typeof tasks !==
+              "undefined" &&
+            Array.isArray(tasks) &&
+            typeof editingId !==
+              "undefined"
+          ) {
+
+            taskBeforeDelete =
+              tasks.find(
+                function (task) {
+
+                  return (
+                    task.id ===
+                    editingId
+                  );
+
+                }
+              );
+
+          }
+
+        } catch (error) {}
+
+
+        /*
+         * 等 V18 原本刪除流程完成。
+         */
+
+        setTimeout(
+          function () {
+
+            if (!taskBeforeDelete) {
+              return;
+            }
+
+            trackBehavior(
+              "task_delete",
+              {
+
+                task_id:
+                  taskBeforeDelete.id,
+
+                metadata: {
+
+                  title:
+                    taskBeforeDelete.title ||
+                    null,
+
+                  content_length:
+                    (
+                      taskBeforeDelete.content ||
+                      ""
+                    ).length,
+
+                  task_type:
+                    taskBeforeDelete.type ||
+                    null,
+
+                  date:
+                    taskBeforeDelete.date ||
+                    null,
+
+                  time:
+                    taskBeforeDelete.time ||
+                    null
+
+                }
+
+              }
+            );
+
+          },
+
+          0
+
+        );
+
+      },
+
+      true
+
+    );
+
+  }
+
+
+  /* ================================================================
+     12｜App Close
+     ================================================================ */
+
+  window.addEventListener(
+    "beforeunload",
+    function () {
+
+      trackBehavior(
+        "app_close"
+      );
+
+    }
+  );
+
+
+  /* ================================================================
+     13｜完成
+     ================================================================ */
+
+  console.log(
+    "✅ Nut Nut User Behavior System V1.1 已完成安裝"
+  );
+
+  console.log(
+    "👉 查看資料：getNutNutBehaviorEvents()"
+  );
+
+})();
+</script>
+     
+
+</body>
 </html>
 
 
