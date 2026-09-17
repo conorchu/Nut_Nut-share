@@ -4852,7 +4852,7 @@ async function clearFriendsListForDemo() {
 
       const CYCLE_MIN_OCCURRENCES = 2; // 出現 2 次就開始學，3 次以上加做穩定度檢查
       const CYCLE_MIN_GAP_DAYS = 3; // 間隔太短（<3 天）視為 routine / 重複點擊，不當週期事項
-      const CYCLE_SHOW_WITHIN_DAYS = 7; // 預測日在 7 天內（或已逾期）才跳提醒卡
+      const CYCLE_SHOW_WITHIN_DAYS = 35; // 預測日在 35 天內（或已逾期）才跳提醒卡
 
       let cycleSnooze = JSON.parse(
         localStorage.getItem("nutnut_v12_cycle_snooze") || "{}",
